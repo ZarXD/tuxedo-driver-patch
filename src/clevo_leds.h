@@ -41,6 +41,8 @@ enum clevo_kb_backlight_types clevo_leds_get_backlight_type(void);
 void clevo_leds_restore_state_extern(void);
 void clevo_leds_notify_brightness_change_extern(void);
 void clevo_leds_set_brightness_extern(enum led_brightness brightness);
+enum led_brightness clevo_leds_get_brightness_extern(void);
+void clevo_leds_flip_brightness_tracking(void);
 void clevo_leds_set_color_extern(u32 color);
 static bool dmi_string_in(enum dmi_field f, const char *str);
 
@@ -522,6 +524,48 @@ void clevo_leds_set_brightness_extern(enum led_brightness brightness) {
 	}
 }
 EXPORT_SYMBOL(clevo_leds_set_brightness_extern);
+
+enum led_brightness clevo_leds_get_brightness_extern(void) {
+	if (clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_FIXED_COLOR) {
+		return clevo_led_cdev.brightness;
+	}
+	else if (clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_1_ZONE_RGB ||
+	         clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_3_ZONE_RGB) {
+		return clevo_mcled_cdevs[0].led_cdev.brightness;
+	}
+	return LED_OFF;
+}
+EXPORT_SYMBOL(clevo_leds_get_brightness_extern);
+
+/**
+ * clevo_leds_flip_brightness_tracking - sync driver state after hardware toggle
+ *
+ * Called when the Fn toggle key fires. The hardware EC has already toggled
+ * the physical backlight. This function only flips the driver's internal
+ * brightness tracking (led_cdev.brightness) to match the new hardware state,
+ * WITHOUT sending any commands to the EC. Sending commands would fight the
+ * hardware and cause the toggle to appear broken.
+ */
+void clevo_leds_flip_brightness_tracking(void) {
+	enum led_brightness new_brightness;
+
+	if (!leds_initialized)
+		return;
+
+	if (clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_FIXED_COLOR) {
+		new_brightness = (clevo_led_cdev.brightness > 0) ? LED_OFF : clevo_led_cdev.max_brightness;
+		clevo_led_cdev.brightness = new_brightness;
+	} else if (clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_1_ZONE_RGB) {
+		new_brightness = (clevo_mcled_cdevs[0].led_cdev.brightness > 0) ? LED_OFF : CLEVO_KBD_BRIGHTNESS_MAX;
+		clevo_mcled_cdevs[0].led_cdev.brightness = new_brightness;
+	} else if (clevo_kb_backlight_type == CLEVO_KB_BACKLIGHT_TYPE_3_ZONE_RGB) {
+		new_brightness = (clevo_mcled_cdevs[0].led_cdev.brightness > 0) ? LED_OFF : CLEVO_KBD_BRIGHTNESS_MAX;
+		clevo_mcled_cdevs[0].led_cdev.brightness = new_brightness;
+		clevo_mcled_cdevs[1].led_cdev.brightness = new_brightness;
+		clevo_mcled_cdevs[2].led_cdev.brightness = new_brightness;
+	}
+}
+EXPORT_SYMBOL(clevo_leds_flip_brightness_tracking);
 
 // TODO Not used externaly, but only on init. Should not be exposed because it would require a correct
 // led_classdev_notify_brightness_hw_changed equivalent for color implementation when used outside of init.

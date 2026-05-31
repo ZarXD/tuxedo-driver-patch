@@ -68,7 +68,8 @@ static struct key_entry clevo_keymap[] = {
 	// Keyboard backlight (RGB versions)
 	{ KE_KEY, CLEVO_EVENT_KB_LEDS_DECREASE, { KEY_KBDILLUMDOWN } },
 	{ KE_KEY, CLEVO_EVENT_KB_LEDS_INCREASE, { KEY_KBDILLUMUP } },
-	{ KE_KEY, CLEVO_EVENT_KB_LEDS_TOGGLE, { KEY_KBDILLUMTOGGLE } },
+	// Toggle handled in driver to prevent DE from restoring brightness
+	{ KE_IGNORE, CLEVO_EVENT_KB_LEDS_TOGGLE, { KEY_KBDILLUMTOGGLE } },
 	{ KE_KEY, CLEVO_EVENT_KB_LEDS_CYCLE_MODE, { KEY_LIGHTS_TOGGLE } },
 	// Single cycle key (white only versions) (currently handled in driver)
 	// { KE_KEY, CLEVO_EVENT_KB_LEDS_CYCLE_BRIGHTNESS, { KEY_KBDILLUMTOGGLE } },
@@ -76,7 +77,8 @@ static struct key_entry clevo_keymap[] = {
 	// Alternative events (ex. 6 step white kbd)
 	{ KE_KEY, CLEVO_EVENT_KB_LEDS_DECREASE2, { KEY_KBDILLUMDOWN } },
 	{ KE_KEY, CLEVO_EVENT_KB_LEDS_INCREASE2, { KEY_KBDILLUMUP } },
-	{ KE_KEY, CLEVO_EVENT_KB_LEDS_TOGGLE2, { KEY_KBDILLUMTOGGLE } },
+	// Toggle2 handled in driver to prevent DE from restoring brightness
+	{ KE_IGNORE, CLEVO_EVENT_KB_LEDS_TOGGLE2, { KEY_KBDILLUMTOGGLE } },
 
 	// Touchpad
 	// The weirdly named touchpad toggle key that is implemented as KEY_F21 "everywhere"
@@ -296,10 +298,24 @@ static void clevo_keyboard_event_callb(u32 event)
 		case CLEVO_EVENT_GAUGE_KEY:
 			clevo_send_cc_combo();
 			break;
+		case CLEVO_EVENT_KB_LEDS_TOGGLE:
+		case CLEVO_EVENT_KB_LEDS_TOGGLE2:
+			/* Hardware does NOT auto-toggle — it only fires the ACPI event.
+			 * KE_IGNORE prevents DE from receiving KEY_KBDILLUMTOGGLE and
+			 * restoring brightness from its saved state.
+			 * We must actually send the EC command here to toggle the LED.
+			 */
+			clevo_leds_set_brightness_extern(
+				clevo_leds_get_brightness_extern() > 0 ? LED_OFF : CLEVO_KBD_BRIGHTNESS_MAX);
+			break;
 		case CLEVO_EVENT_KB_LEDS_CYCLE_MODE:
 			if (clevo_leds_get_backlight_type() == CLEVO_KB_BACKLIGHT_TYPE_FIXED_COLOR) {
 				clevo_send_cc_combo();
-			} else {
+			} else if (clevo_leds_get_brightness_extern() > 0) {
+				/* Only cycle color when keyboard is on.
+				 * Cycling while off sends a color EC command which may
+				 * implicitly re-enable the keyboard on Clevo firmware.
+				 */
 				set_next_color_whole_kb();
 			}
 			break;

@@ -1,8 +1,31 @@
 # Table of Content
+- <a href="#patches--credits">Patches & Credits</a>
 - <a href="#description">Description</a>
 - <a href="#building-and-install">Building and Install</a>
 - <a href="#troubleshooting">Troubleshooting</a>
 - <a href="#regarding-upstreaming-of-tuxedo-drivers">Regarding upstreaming of tuxedo-drivers</a>
+
+# Patches & Credits
+
+This is a patched fork of [tuxedo-drivers](https://gitlab.com/tuxedocomputers/development/packages/tuxedo-drivers)
+for **non-Tuxedo Clevo ODM hardware** (laptops using a Clevo chassis without TUXEDO DMI branding,
+e.g. Acer Aspire 7 Pro).
+
+## Applied Patches
+
+| Patch | File(s) | Description |
+|---|---|---|
+| **Compatibility bypass** | `tuxedo_compatibility_check.c` | `tuxedo_is_compatible()` always returns `true`. Upstream restricts loading to TUXEDO-branded DMI strings or legacy CPUs — this allows any Clevo ODM device to load the drivers. |
+| **Fn+toggle fix** | `clevo_keyboard.h`, `clevo_leds.h` | Toggle key event (`0x9F`/`0x3F`) is now handled in-driver via direct EC brightness command instead of emitting `KEY_KBDILLUMTOGGLE` to userspace. Prevents the DE from silently restoring brightness after toggle. |
+| **Fn+cycle guard** | `clevo_keyboard.h` | Color cycle only runs when backlight brightness > 0. Avoids an EC color command accidentally re-enabling the keyboard when it's supposed to be off. |
+| **Boot animation** | `kb-boot-anim.py` | RGB rainbow sweep on boot, smoothly converges to red. Installed as a systemd service. |
+| **Install script** | `install.sh` | One-command installer with kernel update hook, cross-distro support, and optional boot animation. |
+
+## Patched by
+
+**Izaa** (`izaa` / Nightraven)
+
+---
 
 # Description
 Drivers for several platform devices for TUXEDO notebooks meant for DKMS.
@@ -45,6 +68,20 @@ Drivers for several platform devices for TUXEDO notebooks meant for DKMS.
 - gxtp7380
 
 # Building and Install
+
+## Quick Install (patched)
+
+```bash
+sudo ./install.sh [--animation | --no-animation] [kernel-version]
+```
+
+Options:
+- `--animation` — install boot animation without prompting
+- `--no-animation` — skip boot animation without prompting
+- *(no flag)* — asks interactively
+
+The script will build modules, install to `updates/src/`, set up a kernel-update hook in
+`/etc/kernel/postinst.d/zz-clevo-drivers`, and optionally install the boot animation service.
 
 ## Dependencies:
 All:
