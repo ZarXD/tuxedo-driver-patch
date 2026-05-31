@@ -10,11 +10,12 @@
 #   - Boot animation: RGB rainbow → converges to red on startup
 #
 # Usage:
-#   sudo ./install.sh [--animation | --no-animation] [kernel-version]
+#   sudo ./install.sh [flags] [kernel-version]
 #
-#   --animation      Install boot animation (no prompt)
-#   --no-animation   Skip boot animation (no prompt)
-#   (no flag)        Ask interactively
+#   --animation         Install boot animation (no prompt)
+#   --no-animation      Skip boot animation (no prompt)
+#   --update-animation  ONLY update animation speed/script, skip driver rebuild
+#   (no flag)           Asks interactively
 #
 # Works on: Ubuntu/Debian, Arch, Fedora/RHEL
 # Persists across kernel updates via /etc/kernel/postinst.d/
@@ -27,12 +28,14 @@ HOOK_PATH="/etc/kernel/postinst.d/zz-clevo-drivers"
 
 # --- Parse args ---
 INSTALL_ANIM="ask"   # ask | yes | no
+UPDATE_ANIM_ONLY=false
 KVER=""
 for arg in "$@"; do
     case "$arg" in
-        --animation)    INSTALL_ANIM="yes" ;;
-        --no-animation) INSTALL_ANIM="no"  ;;
-        *)              KVER="$arg"        ;;
+        --animation)        INSTALL_ANIM="yes" ;;
+        --no-animation)     INSTALL_ANIM="no"  ;;
+        --update-animation) UPDATE_ANIM_ONLY=true ;;
+        *)                  KVER="$arg"        ;;
     esac
 done
 [[ -z "$KVER" ]] && KVER="$(uname -r)"
@@ -45,6 +48,31 @@ err()  { echo -e "\e[31m[clevo-install]\e[0m $*" >&2; exit 1; }
 
 if [[ $EUID -ne 0 ]]; then
     err "Run as root: sudo ./install.sh"
+fi
+
+# --- Animation-only mode (fast path) ---
+if [[ "$UPDATE_ANIM_ONLY" == true ]]; then
+    ANIM_SCRIPT="$SCRIPT_DIR/kb-boot-anim.py"
+    ANIM_BIN="/usr/local/bin/nightraven-kb-boot"
+
+    [[ -f "$ANIM_SCRIPT" ]] || err "kb-boot-anim.py not found in $SCRIPT_DIR"
+
+    log "Updating animation script only..."
+    cp "$ANIM_SCRIPT" "$ANIM_BIN"
+    chmod +x "$ANIM_BIN"
+    log "Copied to $ANIM_BIN"
+
+    if command -v systemctl &>/dev/null; then
+        systemctl restart nightraven-kb-boot.service 2>/dev/null && \
+            log "Service restarted — animation played!" || \
+            warn "Service not found. Run with --animation first to install it."
+    fi
+
+    read -r -p $'\e[36m[clevo-install]\e[0m Preview animation now? [Y/n] ' ans
+    [[ ! "$ans" =~ ^[Nn] ]] && python3 "$ANIM_BIN"
+
+    log "Done! Edit kb-boot-anim.py and re-run: sudo ./install.sh --update-animation"
+    exit 0
 fi
 
 log "Kernel: $KVER"
