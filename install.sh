@@ -212,8 +212,67 @@ else
     log "Skipping boot animation."
 fi
 
+# --- 7. Keyboard brightness guard (prevents GNOME restoring brightness after unlock) ---
+GUARD_SCRIPT="$SCRIPT_DIR/nightraven-kbd-guard.py"
+GUARD_BIN="/usr/local/bin/nightraven-kbd-guard"
+
+if [[ -f "$GUARD_SCRIPT" ]]; then
+    log "Installing keyboard brightness guard..."
+    cp "$GUARD_SCRIPT" "$GUARD_BIN"
+    chmod +x "$GUARD_BIN"
+
+    # Detect real user (when run via sudo)
+    REAL_USER="${SUDO_USER:-$USER}"
+    REAL_HOME=$(eval echo "~$REAL_USER")
+    REAL_UID=$(id -u "$REAL_USER")
+    USER_SYSTEMD_DIR="$REAL_HOME/.config/systemd/user"
+    DBUS_ADDR="unix:path=/run/user/${REAL_UID}/bus"
+    XDG_RT="/run/user/${REAL_UID}"
+
+    mkdir -p "$USER_SYSTEMD_DIR"
+    cat > "$USER_SYSTEMD_DIR/nightraven-kbd-guard.service" << 'GUARDEOF'
+[Unit]
+Description=Nightraven Keyboard Brightness Guardian
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/nightraven-kbd-guard
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target
+GUARDEOF
+
+    chown -R "$REAL_USER:$REAL_USER" "$USER_SYSTEMD_DIR" 2>/dev/null || true
+
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="$XDG_RT" \
+        systemctl --user daemon-reload 2>/dev/null || true
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="$XDG_RT" \
+        systemctl --user enable nightraven-kbd-guard.service 2>/dev/null && \
+        log "Guard service enabled." || \
+        warn "Enable manually: systemctl --user enable nightraven-kbd-guard.service"
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="$XDG_RT" \
+        systemctl --user start nightraven-kbd-guard.service 2>/dev/null && \
+        log "Guard service started." || \
+        warn "Start manually: systemctl --user start nightraven-kbd-guard.service"
+
+    # Disable GNOME idle-dim (restores kbd brightness on screen wake)
+    sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDR" \
+        gsettings set org.gnome.settings-daemon.plugins.power idle-dim false 2>/dev/null && \
+        log "GNOME idle-dim disabled." || \
+        warn "Run manually: gsettings set org.gnome.settings-daemon.plugins.power idle-dim false"
+else
+    warn "Guard script not found: $GUARD_SCRIPT — skipping kbd-guard installation."
+fi
+
 echo ""
 log "=== Installation complete for kernel $KVER ==="
 log "On a NEW Linux install:"
 log "  1. git clone <your-repo>"
 log "  2. sudo ./install.sh"
+log "  Log daemon: journalctl --user -u nightraven-kbd-guard.service -f"
