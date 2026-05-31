@@ -14,11 +14,13 @@ MI_PATH    = f"{LED_PATH}/multi_intensity"
 BR_PATH    = f"{LED_PATH}/brightness"
 
 # ── Tuneable params ──────────────────────────────────────────
-RAINBOW_DURATION    = 3.0   # seconds of spinning rainbow
+RAINBOW_DURATION    = 8.0   # seconds — gives ~3.1 full rotations at current speed
 TRANSITION_DURATION = 1.4   # seconds to converge to red
 FPS                 = 40    # frames per second (don't go above 60)
-START_SPEED_DPS     = 380   # deg/sec at start
-END_SPEED_DPS       = 28    # deg/sec at end of rainbow (crawling to red)
+START_SPEED_DPS     = 260   # deg/sec at start
+END_SPEED_DPS       = 20    # deg/sec at end of rainbow (crawling to red)
+PULSE_FREQ          = 1.8   # brightness pulses per second (Hz) — lower = not repetitive over longer anim
+PULSE_DEPTH         = 0.55  # how deep the pulse dips (0=no dip, 1=full off)
 # ─────────────────────────────────────────────────────────────
 
 
@@ -57,19 +59,31 @@ if not os.path.exists(MI_PATH):
     sys.exit(1)
 
 dt = 1.0 / FPS
+elapsed = 0.0
 
-# ── Phase 1: Rainbow with decelerating spin ──────────────────
+# ── Phase 1: Rainbow + brightness pulse ──────────────────────
 rainbow_frames = int(RAINBOW_DURATION * FPS)
 hue = 0.0
 
 for i in range(rainbow_frames):
     progress = i / rainbow_frames          # 0 → 1
-    # Interpolate angular speed (linear deceleration)
+    elapsed  += dt
+
+    # Hue: decelerating spin
     speed = START_SPEED_DPS + (END_SPEED_DPS - START_SPEED_DPS) * progress
     hue = (hue + speed * dt) % 360
 
+    # Brightness pulse: sine wave between (1 - PULSE_DEPTH) and 1.0
+    # Pulse fades out toward end of rainbow so transition is smooth
+    pulse_fade = 1.0 - progress
+    v_min  = 1.0 - PULSE_DEPTH * pulse_fade
+    v_wave = (1.0 + math.sin(2 * math.pi * PULSE_FREQ * elapsed)) / 2  # 0–1
+    v      = v_min + (1.0 - v_min) * v_wave
+
+    # Apply v ONLY via RGB scale (not via brightness too — avoids v² double-dip)
     r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
-    set_rgb(r, g, b)
+    r, g, b = int(r * v), int(g * v), int(b * v)
+    set_rgb(r, g, b)  # brightness stays at 255
     time.sleep(dt)
 
 rainbow_end_hue = hue   # where we stopped
@@ -87,7 +101,10 @@ for i in range(trans_frames):
     ease     = ease_in_out(progress)
     current_hue = (rainbow_end_hue + delta * ease) % 360
 
+    # Pulse fully off → brightness smoothly rises to full during transition
+    v = 0.7 + 0.3 * ease
     r, g, b = hsv_to_rgb(current_hue, 1.0, 1.0)
+    r, g, b = int(r * v), int(g * v), int(b * v)
     set_rgb(r, g, b)
     time.sleep(dt)
 

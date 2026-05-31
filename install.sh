@@ -12,10 +12,10 @@
 # Usage:
 #   sudo ./install.sh [flags] [kernel-version]
 #
-#   --animation         Install boot animation (no prompt)
-#   --no-animation      Skip boot animation (no prompt)
-#   --update-animation  ONLY update animation speed/script, skip driver rebuild
-#   (no flag)           Asks interactively
+#   --animation         Install boot animation (asks style, no driver prompt)
+#   --no-animation      Skip boot animation
+#   --update-animation  ONLY update animation script, skip driver rebuild
+#   (no flag)           Fully interactive
 #
 # Works on: Ubuntu/Debian, Arch, Fedora/RHEL
 # Persists across kernel updates via /etc/kernel/postinst.d/
@@ -52,26 +52,37 @@ fi
 
 # --- Animation-only mode (fast path) ---
 if [[ "$UPDATE_ANIM_ONLY" == true ]]; then
-    ANIM_SCRIPT="$SCRIPT_DIR/kb-boot-anim.py"
     ANIM_BIN="/usr/local/bin/nightraven-kb-boot"
 
-    [[ -f "$ANIM_SCRIPT" ]] || err "kb-boot-anim.py not found in $SCRIPT_DIR"
+    echo ""
+    echo -e "\e[36m[clevo-install]\e[0m Which animation style?"
+    echo "  1) Color Tour  — rainbow → pastel → dark → flash → red"
+    echo "  2) Pulse       — rainbow + brightness pulse → red"
+    read -r -p $'\e[36m[clevo-install]\e[0m Style [1/2]: ' style_ans
 
-    log "Updating animation script only..."
-    cp "$ANIM_SCRIPT" "$ANIM_BIN"
+    if [[ "$style_ans" == "1" ]]; then
+        SRC="$SCRIPT_DIR/kb-boot-anim-1.py"
+    else
+        SRC="$SCRIPT_DIR/kb-boot-anim-2.py"
+    fi
+
+    [[ -f "$SRC" ]] || err "Animation file not found: $SRC"
+
+    log "Updating animation script (style $style_ans)..."
+    cp "$SRC" "$ANIM_BIN"
     chmod +x "$ANIM_BIN"
     log "Copied to $ANIM_BIN"
 
     if command -v systemctl &>/dev/null; then
         systemctl restart nightraven-kb-boot.service 2>/dev/null && \
-            log "Service restarted — animation played!" || \
+            log "Service restarted!" || \
             warn "Service not found. Run with --animation first to install it."
     fi
 
     read -r -p $'\e[36m[clevo-install]\e[0m Preview animation now? [Y/n] ' ans
     [[ ! "$ans" =~ ^[Nn] ]] && python3 "$ANIM_BIN"
 
-    log "Done! Edit kb-boot-anim.py and re-run: sudo ./install.sh --update-animation"
+    log "Done! Edit kb-boot-anim-${style_ans}.py and re-run: sudo ./install.sh --update-animation"
     exit 0
 fi
 
@@ -142,27 +153,42 @@ modprobe tuxedo_keyboard && modprobe tuxedo_io && \
     log "Modules loaded successfully!" || warn "Module load failed — try rebooting."
 
 # --- 6. Boot animation ---
-ANIM_SCRIPT="$SCRIPT_DIR/kb-boot-anim.py"
 ANIM_BIN="/usr/local/bin/nightraven-kb-boot"
 ANIM_SERVICE="/etc/systemd/system/nightraven-kb-boot.service"
+ANIM_STYLE=""
 
-if [[ ! -f "$ANIM_SCRIPT" ]] || ! command -v systemctl &>/dev/null; then
-    warn "kb-boot-anim.py not found or no systemctl — skipping animation."
+if ! command -v systemctl &>/dev/null; then
+    warn "No systemctl found — skipping animation."
     INSTALL_ANIM="no"
 fi
 
 if [[ "$INSTALL_ANIM" == "ask" ]]; then
     echo ""
-    read -r -p $'\e[36m[clevo-install]\e[0m Install RGB boot animation (rainbow → red on startup)? [Y/n] ' ans
-    [[ "$ans" =~ ^[Nn] ]] && INSTALL_ANIM="no" || INSTALL_ANIM="yes"
+    echo -e "\e[36m[clevo-install]\e[0m Install RGB boot animation?"
+    echo "  1) Color Tour  — rainbow → pastel → dark → flash → red"
+    echo "  2) Pulse       — rainbow + brightness pulse → red"
+    echo "  n) No animation"
+    read -r -p $'\e[36m[clevo-install]\e[0m Choice [1/2/n]: ' anim_ans
+    case "$anim_ans" in
+        1) INSTALL_ANIM="yes"; ANIM_STYLE="1" ;;
+        2) INSTALL_ANIM="yes"; ANIM_STYLE="2" ;;
+        *) INSTALL_ANIM="no" ;;
+    esac
 fi
 
 if [[ "$INSTALL_ANIM" == "yes" ]]; then
-    log "Installing keyboard boot animation..."
-    cp "$ANIM_SCRIPT" "$ANIM_BIN"
-    chmod +x "$ANIM_BIN"
+    # Default to style 2 if flag was --animation without style selection
+    [[ -z "$ANIM_STYLE" ]] && ANIM_STYLE="2"
+    ANIM_SCRIPT="$SCRIPT_DIR/kb-boot-anim-${ANIM_STYLE}.py"
 
-    cat > "$ANIM_SERVICE" << SVCEOF
+    if [[ ! -f "$ANIM_SCRIPT" ]]; then
+        warn "Animation file not found: $ANIM_SCRIPT — skipping."
+    else
+        log "Installing boot animation style $ANIM_STYLE..."
+        cp "$ANIM_SCRIPT" "$ANIM_BIN"
+        chmod +x "$ANIM_BIN"
+
+        cat > "$ANIM_SERVICE" << SVCEOF
 [Unit]
 Description=Nightraven Keyboard RGB Boot Animation
 After=systemd-modules-load.service
@@ -178,9 +204,10 @@ StandardOutput=journal
 WantedBy=multi-user.target
 SVCEOF
 
-    systemctl daemon-reload
-    systemctl enable nightraven-kb-boot.service 2>/dev/null
-    log "Boot animation installed & enabled."
+        systemctl daemon-reload
+        systemctl enable nightraven-kb-boot.service 2>/dev/null
+        log "Boot animation (style $ANIM_STYLE) installed & enabled."
+    fi
 else
     log "Skipping boot animation."
 fi
