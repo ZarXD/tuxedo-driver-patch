@@ -1,30 +1,15 @@
 #!/bin/bash
 # ============================================================
-# Clevo/Nightraven Driver Installer
+# Clevo/Nightraven Driver Installer (DKMS Version)
 # Patched fork of tuxedo-drivers for non-Tuxedo Clevo ODM hardware
 #
-# Patches applied:
-#   - tuxedo_is_compatible() bypass (Clevo ODM, e.g. Acer Aspire Pro)
-#   - Fn+toggle: properly turns RGB off/on instead of bouncing
-#   - Fn+cycle: only cycles color when backlight is on
-#   - Boot animation: RGB rainbow → converges to red on startup
-#
-# Usage:
-#   sudo ./install.sh [flags] [kernel-version]
-#
-#   --animation         Install boot animation (asks style, no driver prompt)
-#   --no-animation      Skip boot animation
-#   --update-animation  ONLY update animation script, skip driver rebuild
-#   (no flag)           Fully interactive
-#
-# Works on: Ubuntu/Debian, Arch, Fedora/RHEL
-# Persists across kernel updates via /etc/kernel/postinst.d/
+# Works on: openSUSE Tumbleweed, Ubuntu/Debian, Arch, Fedora/RHEL
+# Uses DKMS for automatic rebuilds across kernel updates.
 # ============================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_PATH="/etc/kernel/postinst.d/zz-clevo-drivers"
 
 # --- Parse args ---
 INSTALL_ANIM="ask"   # ask | yes | no
@@ -39,8 +24,6 @@ for arg in "$@"; do
     esac
 done
 [[ -z "$KVER" ]] && KVER="$(uname -r)"
-
-KBUILD="/lib/modules/$KVER/build"
 
 log()  { echo -e "\e[32m[clevo-install]\e[0m $*"; }
 warn() { echo -e "\e[33m[clevo-install]\e[0m $*"; }
@@ -86,73 +69,96 @@ if [[ "$UPDATE_ANIM_ONLY" == true ]]; then
     exit 0
 fi
 
-log "Kernel: $KVER"
-log "Build dir: $KBUILD"
+log "Target Kernel: $KVER"
 
-# --- 1. Check kernel headers ---
-if [[ ! -d "$KBUILD" ]]; then
-    warn "Kernel headers not found. Trying to install..."
-    if command -v apt &>/dev/null; then
-        apt install -y "linux-headers-$KVER" build-essential
-    elif command -v dnf &>/dev/null; then
-        dnf install -y "kernel-devel-$KVER" "kernel-headers-$KVER" gcc make
-    elif command -v pacman &>/dev/null; then
-        pacman -S --noconfirm linux-headers base-devel
-    else
-        err "Cannot find kernel headers at $KBUILD. Install them manually."
+# --- 1. Dependencies and Package Manager ---
+log "Checking and installing dependencies..."
+if command -v zypper &>/dev/null; then
+    # openSUSE Tumbleweed/Leap
+    # Detect if we're on kernel-default or another flavor
+    KERNEL_FLAVOR="default"
+    if [[ "$KVER" == *"-default"* ]]; then
+        KERNEL_FLAVOR="default"
+    fi
+    log "Detected openSUSE. Using zypper for dependencies."
+    zypper --non-interactive in dkms make gcc kernel-${KERNEL_FLAVOR}-devel mokutil || warn "Failed to install some dependencies. Ensure dkms and kernel-devel are installed."
+elif command -v apt &>/dev/null; then
+    log "Detected Debian/Ubuntu. Using apt for dependencies."
+    apt update -y || true
+    apt install -y "linux-headers-$KVER" build-essential dkms mokutil || warn "Failed to install some dependencies."
+elif command -v dnf &>/dev/null; then
+    log "Detected Fedora/RHEL. Using dnf for dependencies."
+    dnf install -y "kernel-devel-$KVER" "kernel-headers-$KVER" gcc make dkms mokutil || warn "Failed to install some dependencies."
+elif command -v pacman &>/dev/null; then
+    log "Detected Arch Linux. Using pacman for dependencies."
+    pacman -S --noconfirm linux-headers base-devel dkms mokutil || warn "Failed to install some dependencies."
+else
+    warn "Unsupported package manager. Please ensure dkms, make, gcc, and kernel headers are installed manually."
+fi
+
+# Check for DKMS
+if ! command -v dkms &>/dev/null; then
+    err "DKMS is required but not installed. Please install dkms package."
+fi
+
+# Secure Boot check
+if command -v mokutil &>/dev/null; then
+    if mokutil --sb-state 2>/dev/null | grep -q "SecureBoot enabled"; then
+        warn "Secure Boot is ENABLED."
+        warn "DKMS modules must be signed to be loaded by the kernel."
+        warn "Ensure you have enrolled a MOK key and configured DKMS for signing."
     fi
 fi
 
-[[ -d "$KBUILD" ]] || err "Kernel headers still not found at $KBUILD"
+# --- 2. DKMS Installation ---
+DKMS_NAME="tuxedo-drivers"
+DKMS_VERSION="patched"
+SRC_DEST="/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
 
-# --- 2. Build ---
-log "Building modules from $SCRIPT_DIR ..."
-make -C "$KBUILD" M="$SCRIPT_DIR" clean 2>/dev/null || true
-make -C "$KBUILD" M="$SCRIPT_DIR" -j"$(nproc)" modules
-log "Build complete."
+log "Preparing DKMS source directory at $SRC_DEST"
 
-# --- 3. Install ---
-log "Installing modules..."
-make -C "$KBUILD" M="$SCRIPT_DIR" modules_install
-depmod -a "$KVER"
-log "Install complete."
+# Remove existing source dir if it exists
+rm -rf "$SRC_DEST"
+mkdir -p "$SRC_DEST"
+cp -a "$SCRIPT_DIR/"* "$SRC_DEST/"
+cp "$SCRIPT_DIR/dkms.conf" "$SRC_DEST/dkms.conf"
 
-# --- 4. Set up auto-rebuild hook for kernel updates ---
-if [[ -d /etc/kernel/postinst.d ]]; then
-    log "Installing kernel update hook to $HOOK_PATH ..."
-    cat > "$HOOK_PATH" << EOF
-#!/bin/bash
-# Auto-rebuild clevo patched drivers after kernel update
-# Installed by: $SCRIPT_DIR/install.sh
-KVER="\$1"
-KBUILD="/lib/modules/\$KVER/build"
-DRIVER_DIR="$SCRIPT_DIR"
-
-if [[ -d "\$KBUILD" && -d "\$DRIVER_DIR" ]]; then
-    echo "[clevo-drivers] Rebuilding for kernel \$KVER ..."
-    make -C "\$KBUILD" M="\$DRIVER_DIR" clean 2>/dev/null || true
-    make -C "\$KBUILD" M="\$DRIVER_DIR" -j\$(nproc) modules && \
-    make -C "\$KBUILD" M="\$DRIVER_DIR" modules_install && \
-    depmod -a "\$KVER" && \
-    echo "[clevo-drivers] Done for \$KVER" || \
-    echo "[clevo-drivers] Build failed for \$KVER — install linux-headers-\$KVER"
-fi
-EOF
-    chmod +x "$HOOK_PATH"
-    log "Kernel update hook installed."
-else
-    warn "/etc/kernel/postinst.d not found — no auto-rebuild on kernel update."
-    warn "On kernel update, re-run: sudo ./install.sh <new-kernel-version>"
+# Remove existing DKMS installation to make installer idempotent
+if dkms status -m "$DKMS_NAME" -v "$DKMS_VERSION" | grep -q "added"; then
+    log "Removing existing DKMS module $DKMS_NAME-$DKMS_VERSION"
+    dkms remove -m "$DKMS_NAME" -v "$DKMS_VERSION" --all || true
 fi
 
-# --- 5. Reload modules ---
+log "Adding module to DKMS..."
+dkms add -m "$DKMS_NAME" -v "$DKMS_VERSION"
+
+log "Building module via DKMS (this might take a while)..."
+if ! dkms build -m "$DKMS_NAME" -v "$DKMS_VERSION" -k "$KVER"; then
+    err "DKMS build failed for kernel $KVER. Please check /var/lib/dkms/$DKMS_NAME/$DKMS_VERSION/build/make.log"
+fi
+
+log "Installing module via DKMS..."
+if ! dkms install -m "$DKMS_NAME" -v "$DKMS_VERSION" -k "$KVER"; then
+    err "DKMS install failed for kernel $KVER."
+fi
+
+# Cleanup old postinst hook if it exists
+HOOK_PATH="/etc/kernel/postinst.d/zz-clevo-drivers"
+if [[ -f "$HOOK_PATH" ]]; then
+    log "Removing obsolete Debian kernel hook $HOOK_PATH..."
+    rm -f "$HOOK_PATH"
+fi
+
+log "DKMS installation complete."
+
+# --- 3. Reload modules ---
 log "Reloading modules..."
 rmmod tuxedo_io clevo_acpi clevo_wmi tuxedo_keyboard tuxedo_compatibility_check \
     uniwill_wmi 2>/dev/null || true
 modprobe tuxedo_keyboard && modprobe tuxedo_io && \
-    log "Modules loaded successfully!" || warn "Module load failed — try rebooting."
+    log "Modules loaded successfully!" || warn "Module load failed — they may be signed incorrectly or require a reboot."
 
-# --- 6. Boot animation ---
+# --- 4. Boot animation ---
 ANIM_BIN="/usr/local/bin/nightraven-kb-boot"
 ANIM_SERVICE="/etc/systemd/system/nightraven-kb-boot.service"
 ANIM_STYLE=""
@@ -212,7 +218,7 @@ else
     log "Skipping boot animation."
 fi
 
-# --- 7. Keyboard brightness guard (prevents GNOME restoring brightness after unlock) ---
+# --- 5. Keyboard brightness guard ---
 GUARD_SCRIPT="$SCRIPT_DIR/nightraven-kbd-guard.py"
 GUARD_BIN="/usr/local/bin/nightraven-kbd-guard"
 
@@ -261,18 +267,21 @@ GUARDEOF
         log "Guard service started." || \
         warn "Start manually: systemctl --user start nightraven-kbd-guard.service"
 
-    # Disable GNOME idle-dim (restores kbd brightness on screen wake)
-    sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDR" \
-        gsettings set org.gnome.settings-daemon.plugins.power idle-dim false 2>/dev/null && \
-        log "GNOME idle-dim disabled." || \
-        warn "Run manually: gsettings set org.gnome.settings-daemon.plugins.power idle-dim false"
+    # Disable GNOME idle-dim gracefully (do not fail if gsettings is missing or user is on KDE)
+    if command -v gsettings &>/dev/null; then
+        sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDR" \
+            gsettings set org.gnome.settings-daemon.plugins.power idle-dim false 2>/dev/null && \
+            log "GNOME idle-dim disabled." || \
+            log "GNOME idle-dim disable skipped (likely not on GNOME, which is fine)."
+    else
+        log "gsettings not found, skipping GNOME idle-dim disable (fine for KDE/openSUSE)."
+    fi
 else
     warn "Guard script not found: $GUARD_SCRIPT — skipping kbd-guard installation."
 fi
 
 echo ""
 log "=== Installation complete for kernel $KVER ==="
-log "On a NEW Linux install:"
-log "  1. git clone <your-repo>"
-log "  2. sudo ./install.sh"
-log "  Log daemon: journalctl --user -u nightraven-kbd-guard.service -f"
+log "Drivers have been installed via DKMS."
+log "They will automatically rebuild during future kernel updates."
+log "Log daemon: journalctl --user -u nightraven-kbd-guard.service -f"
