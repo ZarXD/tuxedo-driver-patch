@@ -155,8 +155,11 @@ log "DKMS installation complete."
 log "Reloading modules..."
 rmmod tuxedo_io clevo_acpi clevo_wmi tuxedo_keyboard tuxedo_compatibility_check \
     uniwill_wmi 2>/dev/null || true
-modprobe tuxedo_keyboard && modprobe tuxedo_io && \
+modprobe tuxedo_keyboard && modprobe clevo_acpi && modprobe clevo_wmi && modprobe tuxedo_io && \
     log "Modules loaded successfully!" || warn "Module load failed — they may be signed incorrectly or require a reboot."
+
+# Persist module loading across boots
+printf 'tuxedo_keyboard\nclevo_acpi\nclevo_wmi\ntuxedo_io\n' > /etc/modules-load.d/tuxedo-drivers.conf
 
 # --- 4. Boot animation ---
 ANIM_BIN="/usr/local/bin/nightraven-kb-boot"
