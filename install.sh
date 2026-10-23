@@ -124,7 +124,7 @@ cp -a "$SCRIPT_DIR/"* "$SRC_DEST/"
 cp "$SCRIPT_DIR/dkms.conf" "$SRC_DEST/dkms.conf"
 
 # Remove existing DKMS installation to make installer idempotent
-if dkms status -m "$DKMS_NAME" -v "$DKMS_VERSION" | grep -q "added"; then
+if dkms status -m "$DKMS_NAME" -v "$DKMS_VERSION" | grep -qE "added|installed"; then
     log "Removing existing DKMS module $DKMS_NAME-$DKMS_VERSION"
     dkms remove -m "$DKMS_NAME" -v "$DKMS_VERSION" --all || true
 fi
