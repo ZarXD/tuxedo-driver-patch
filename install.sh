@@ -123,6 +123,13 @@ mkdir -p "$SRC_DEST"
 cp -a "$SCRIPT_DIR/"* "$SRC_DEST/"
 cp "$SCRIPT_DIR/dkms.conf" "$SRC_DEST/dkms.conf"
 
+# Never ship locally built artifacts into the DKMS tree: they may be stale or
+# built against a different kernel, and make would skip recompiling the source.
+find "$SRC_DEST" -type f \( -name '*.o' -o -name '*.ko' -o -name '*.mod' \
+    -o -name '*.mod.c' -o -name '.*.cmd' -o -name 'modules.order' \
+    -o -name 'Module.symvers' \) -delete
+rm -rf "$SRC_DEST/build"
+
 # Remove existing DKMS installation to make installer idempotent
 if dkms status -m "$DKMS_NAME" -v "$DKMS_VERSION" | grep -qE "added|installed"; then
     log "Removing existing DKMS module $DKMS_NAME-$DKMS_VERSION"
@@ -153,8 +160,8 @@ log "DKMS installation complete."
 
 # --- 3. Reload modules ---
 log "Reloading modules..."
-rmmod tuxedo_io clevo_acpi clevo_wmi tuxedo_keyboard tuxedo_compatibility_check \
-    uniwill_wmi 2>/dev/null || true
+rmmod tuxedo_io clevo_acpi clevo_wmi tuxedo_nb02_nvidia_power_ctrl \
+    tuxedo_keyboard tuxedo_compatibility_check uniwill_wmi 2>/dev/null || true
 modprobe tuxedo_keyboard && modprobe clevo_acpi && modprobe clevo_wmi && modprobe tuxedo_io && \
     log "Modules loaded successfully!" || warn "Module load failed — they may be signed incorrectly or require a reboot."
 
